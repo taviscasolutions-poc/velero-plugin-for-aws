@@ -17,6 +17,7 @@ limitations under the License.
 package main
 
 import (
+        "bytes"
 	"crypto/tls"
 	"io"
 	"net/http"
@@ -316,11 +317,24 @@ func newAWSConfig(url, region string, forcePathStyle bool) (*aws.Config, error) 
 }
 
 func (o *ObjectStore) PutObject(bucket, key string, body io.Reader) error {
-	req := &s3manager.UploadInput{
+	bodyContent, err := io.ReadAll(body)
+	if err != nil {
+		return err
+	}
+
+	encryptedContent, err := Encrypt(bodyContent)
+	
+	if err != nil {
+		return err
+	}
+	encryptedBody := bytes.NewReader(encryptedContent)
+        req := &s3manager.UploadInput{
 		Bucket: &bucket,
 		Key:    &key,
-		Body:   body,
+		Body:   encryptedBody,
 	}
+        
+        o.log.Infof("PutObject: %+v", req)
 
 	switch {
 	// if kmsKeyID is not empty, assume a server-side encryption (SSE)
@@ -337,7 +351,7 @@ func (o *ObjectStore) PutObject(bucket, key string, body io.Reader) error {
 		req.ServerSideEncryption = aws.String(o.serverSideEncryption)
 	}
 
-	_, err := o.s3Uploader.Upload(req)
+	_, err = o.s3Uploader.Upload(req)
 
 	return errors.Wrapf(err, "error putting object %s", key)
 }
@@ -404,8 +418,27 @@ func (o *ObjectStore) GetObject(bucket, key string) (io.ReadCloser, error) {
 	if err != nil {
 		return nil, errors.Wrapf(err, "error getting object %s", key)
 	}
+        bodyContent, err := io.ReadAll(res.Body)
+	if err != nil {
+		return nil, err
+	}
 
-	return res.Body, nil
+	err = res.Body.Close()
+	if err != nil {
+		return nil, err
+	}
+
+	//decryptedContent, err := o.cipher.Decrypt(bodyContent)
+	decryptedContent, err := Decrypt(bodyContent)
+	
+	if err != nil {
+		return nil, err
+	}
+	decryptedBody := io.NopCloser(bytes.NewReader(decryptedContent))
+
+	return decryptedBody, nil
+
+	//return res.Body, nil
 }
 
 func (o *ObjectStore) ListCommonPrefixes(bucket, prefix, delimiter string) ([]string, error) {
