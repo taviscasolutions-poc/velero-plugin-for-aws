@@ -26,6 +26,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"regexp"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/awserr"
@@ -55,6 +56,7 @@ const (
 	insecureSkipTLSVerifyKey     = "insecureSkipTLSVerify"
 	caCertKey                    = "caCert"
 	enableSharedConfigKey        = "enableSharedConfig"
+	aesKeyId		     = "aesKey"
 )
 
 type s3Interface interface {
@@ -74,6 +76,7 @@ type ObjectStore struct {
 	sseCustomerKey       string
 	signatureVersion     string
 	serverSideEncryption string
+	aesKey		     string
 }
 
 func newObjectStore(logger logrus.FieldLogger) *ObjectStore {
@@ -102,6 +105,7 @@ func (o *ObjectStore) Init(config map[string]string) error {
 		serverSideEncryptionKey,
 		insecureSkipTLSVerifyKey,
 		enableSharedConfigKey,
+		aesKeyId,
 	); err != nil {
 		return err
 	}
@@ -119,6 +123,7 @@ func (o *ObjectStore) Init(config map[string]string) error {
 		serverSideEncryption      = config[serverSideEncryptionKey]
 		insecureSkipTLSVerifyVal  = config[insecureSkipTLSVerifyKey]
 		enableSharedConfig        = config[enableSharedConfigKey]
+		aesKey                    = config[aesKeyId]
 
 		// note that bucket is automatically added to the config map
 		// by the server from the ObjectStorageProviderConfig so
@@ -231,6 +236,7 @@ func (o *ObjectStore) Init(config map[string]string) error {
 	} else {
 		o.preSignS3 = o.s3
 	}
+	o.aesKey = aesKey
 
 	return nil
 }
@@ -317,24 +323,38 @@ func newAWSConfig(url, region string, forcePathStyle bool) (*aws.Config, error) 
 }
 
 func (o *ObjectStore) PutObject(bucket, key string, body io.Reader) error {
-	bodyContent, err := io.ReadAll(body)
-	if err != nil {
-		return err
-	}
-
-	encryptedContent, err := Encrypt(bodyContent)
+	var regx = regexp.MustCompile(`/restores/|-logs.gz$`)
 	
-	if err != nil {
-		return err
+	regx_match := regx.MatchString(key)
+	var err error
+
+        var ebody io.Reader
+	if regx_match == true {
+		o.log.Infof("Enc not applicable: %s", key)
+		ebody = body
+
+	} else {
+		    o.log.Infof("Encrypting : %s", key)
+		    bodyContent, err := io.ReadAll(body)
+			if err != nil {
+				return err
+			}
+
+			//encryptedContent, err := o.cipher.Encrypt(bodyContent)
+			encryptedContent, err := Encrypt(bodyContent,o.aesKey)
+			
+			if err != nil {
+				return err
+			}
+			encryptedBody := bytes.NewReader(encryptedContent)
+			ebody = encryptedBody
 	}
-	encryptedBody := bytes.NewReader(encryptedContent)
-        req := &s3manager.UploadInput{
+	
+	req := &s3manager.UploadInput{
 		Bucket: &bucket,
 		Key:    &key,
-		Body:   encryptedBody,
+		Body:   ebody,
 	}
-        
-        o.log.Infof("PutObject: %+v", req)
 
 	switch {
 	// if kmsKeyID is not empty, assume a server-side encryption (SSE)
@@ -355,7 +375,6 @@ func (o *ObjectStore) PutObject(bucket, key string, body io.Reader) error {
 
 	return errors.Wrapf(err, "error putting object %s", key)
 }
-
 const notFoundCode = "NotFound"
 
 // ObjectExists checks if there is an object with the given key in the object storage bucket.
@@ -428,8 +447,7 @@ func (o *ObjectStore) GetObject(bucket, key string) (io.ReadCloser, error) {
 		return nil, err
 	}
 
-	//decryptedContent, err := o.cipher.Decrypt(bodyContent)
-	decryptedContent, err := Decrypt(bodyContent)
+	decryptedContent, err := Decrypt(bodyContent,o.aesKey)
 	
 	if err != nil {
 		return nil, err
