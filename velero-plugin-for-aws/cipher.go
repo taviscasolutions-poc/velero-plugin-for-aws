@@ -7,9 +7,9 @@ import (
 	"io"
 )
 
-func Encrypt(plainBytes []byte) ([]byte, error) {
+func Encrypt(plainBytes []byte,aes_key string) ([]byte, error) {
 
-	key  := []byte("aler,amz3daps.f9hgandkal4dsxk3d0")
+	key  := []byte(aes_key)
         // Creating block of algorithm
     block, err := aes.NewCipher(key)
     if err != nil {
@@ -34,9 +34,9 @@ func Encrypt(plainBytes []byte) ([]byte, error) {
 	return cipherBytes, nil
 }
 
-	func Decrypt(cipherBytes []byte) ([]byte, error) {
+	func Decrypt(cipherBytes []byte,aes_key string) ([]byte, error) {
 
-	key  := []byte("aler,amz3daps.f9hgandkal4dsxk3d0")
+	key  := []byte(aes_key)
     
         // Creating block of algorithm
     block, err := aes.NewCipher(key)
